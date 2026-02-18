@@ -10,17 +10,24 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 -- TABLES
 -- =====================================================
 
--- Users table
-CREATE TABLE IF NOT EXISTS users (
+-- Profiles table (renamed from 'users' to avoid conflict with Supabase auth.users)
+-- Stores profile data for ALL users (email auth + third-party auth)
+CREATE TABLE IF NOT EXISTS profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  email VARCHAR(255) UNIQUE NOT NULL,
-  password_hash VARCHAR(255) NOT NULL,
+  email VARCHAR(255) UNIQUE,
+  password_hash VARCHAR(255),
   name VARCHAR(255) NOT NULL,
   avatar_url TEXT,
   bio TEXT,
+  auth_provider VARCHAR(50) NOT NULL DEFAULT 'email',
+  provider_user_id VARCHAR(255),
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
+
+-- Unique constraint: one user per provider + provider_user_id combination
+CREATE UNIQUE INDEX IF NOT EXISTS idx_profiles_provider_unique
+  ON profiles(auth_provider, provider_user_id);
 
 -- Categories table
 CREATE TABLE IF NOT EXISTS categories (
@@ -46,7 +53,7 @@ CREATE TABLE IF NOT EXISTS destinations (
 -- Trips table
 CREATE TABLE IF NOT EXISTS trips (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
   destination VARCHAR(255) NOT NULL,
   duration INTEGER NOT NULL,
   budget VARCHAR(50) NOT NULL,
@@ -63,7 +70,7 @@ CREATE TABLE IF NOT EXISTS trips (
 -- Favorites table
 CREATE TABLE IF NOT EXISTS favorites (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
   trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   UNIQUE(user_id, trip_id)
@@ -72,7 +79,7 @@ CREATE TABLE IF NOT EXISTS favorites (
 -- Comments table
 CREATE TABLE IF NOT EXISTS comments (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES profiles(id) ON DELETE CASCADE,
   trip_id UUID REFERENCES trips(id) ON DELETE CASCADE,
   content TEXT NOT NULL,
   likes INTEGER DEFAULT 0,
@@ -83,6 +90,8 @@ CREATE TABLE IF NOT EXISTS comments (
 -- INDEXES
 -- =====================================================
 
+CREATE INDEX IF NOT EXISTS idx_profiles_email ON profiles(email);
+CREATE INDEX IF NOT EXISTS idx_profiles_provider ON profiles(auth_provider);
 CREATE INDEX IF NOT EXISTS idx_destinations_category ON destinations(category);
 CREATE INDEX IF NOT EXISTS idx_destinations_trending ON destinations(is_trending);
 CREATE INDEX IF NOT EXISTS idx_trips_user_id ON trips(user_id);
@@ -116,25 +125,38 @@ INSERT INTO destinations (name, location, image_url, rating, category, height, i
   ('Machu Picchu', 'Peru', 'https://images.unsplash.com/photo-1587595431973-160d0d94add1?q=80&w=2076&auto=format&fit=crop', 4.9, 'Adventure', 230, TRUE)
 ON CONFLICT DO NOTHING;
 
--- Demo user (password: Test123!)
-INSERT INTO users (email, password_hash, name, avatar_url, bio) VALUES
-  ('alex@travelai.com', '$2b$10$YourHashedPasswordHere', 'Alex Johnson', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=1887&auto=format&fit=crop', 'Travel Enthusiast')
+-- Demo user (password: Test123!) — email auth via Supabase
+-- Note: In production, this user should be created via supabase.auth.signUp first,
+-- then a profile record is created here. For dev seed, we insert directly.
+INSERT INTO profiles (email, password_hash, name, avatar_url, bio, auth_provider, provider_user_id) VALUES
+  ('alex@travelai.com', '$2b$10$YourHashedPasswordHere', 'Alex Johnson', 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?q=80&w=1887&auto=format&fit=crop', 'Travel Enthusiast', 'email', 'seed-demo-user')
 ON CONFLICT (email) DO NOTHING;
 
 -- =====================================================
 -- ROW LEVEL SECURITY (Optional - for production)
 -- =====================================================
 
--- Disable RLS for development (Supabase enables it by default on new tables)
-ALTER TABLE users ENABLE ROW LEVEL SECURITY;
+-- Enable RLS
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
 ALTER TABLE categories ENABLE ROW LEVEL SECURITY;
 ALTER TABLE destinations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
 
+-- Drop old policies (from previous migration that used 'users' table name)
+DROP POLICY IF EXISTS "Service role has full access to users" ON profiles;
+DROP POLICY IF EXISTS "Service role has full access to categories" ON categories;
+DROP POLICY IF EXISTS "Service role has full access to destinations" ON destinations;
+DROP POLICY IF EXISTS "Service role has full access to trips" ON trips;
+DROP POLICY IF EXISTS "Service role has full access to favorites" ON favorites;
+DROP POLICY IF EXISTS "Service role has full access to comments" ON comments;
+
+-- Drop new policies if they already exist (for idempotent re-runs)
+DROP POLICY IF EXISTS "Service role has full access to profiles" ON profiles;
+
 -- Allow all operations for service_role (used by backend)
-CREATE POLICY "Service role has full access to users" ON users FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role has full access to profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role has full access to categories" ON categories FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role has full access to destinations" ON destinations FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role has full access to trips" ON trips FOR ALL USING (true) WITH CHECK (true);

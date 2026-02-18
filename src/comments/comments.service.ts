@@ -13,7 +13,7 @@ export class CommentsService {
       .from('comments')
       .select(`
         *,
-        users:user_id (id, name, avatar_url)
+        profiles:user_id (id, name, avatar_url)
       `)
       .eq('trip_id', tripId)
       .order('created_at', { ascending: false });
@@ -33,7 +33,7 @@ export class CommentsService {
       })
       .select(`
         *,
-        users:user_id (id, name, avatar_url)
+        profiles:user_id (id, name, avatar_url)
       `)
       .single();
 

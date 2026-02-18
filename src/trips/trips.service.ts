@@ -53,7 +53,7 @@ export class TripsService {
       .from('trips')
       .select(`
         *,
-        users:user_id (id, name, avatar_url)
+        profiles:user_id (id, name, avatar_url)
       `)
       .eq('id', id)
       .single();
@@ -67,7 +67,7 @@ export class TripsService {
       .from('trips')
       .select(`
         *,
-        users:user_id (id, name, avatar_url)
+        profiles:user_id (id, name, avatar_url)
       `)
       .eq('status', 'generated')
       .order('created_at', { ascending: false })
