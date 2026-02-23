@@ -1,6 +1,7 @@
-import { Controller, Get, Post, Delete, Param, Req, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Delete, Param, Req, UseGuards, Headers } from '@nestjs/common';
 import { FavoritesService } from './favorites.service';
 import { AuthGuard } from '../auth/auth.guard';
+import { I18nService } from '../i18n';
 
 @Controller('favorites')
 @UseGuards(AuthGuard)
@@ -13,13 +14,23 @@ export class FavoritesController {
   }
 
   @Post(':tripId')
-  async add(@Req() req: any, @Param('tripId') tripId: string) {
-    return this.favoritesService.add(req.userId, tripId);
+  async add(
+    @Req() req: any,
+    @Param('tripId') tripId: string,
+    @Headers('accept-language') acceptLang?: string,
+  ) {
+    const lang = I18nService.parseLang(acceptLang);
+    return this.favoritesService.add(req.userId, tripId, lang);
   }
 
   @Delete(':tripId')
-  async remove(@Req() req: any, @Param('tripId') tripId: string) {
-    return this.favoritesService.remove(req.userId, tripId);
+  async remove(
+    @Req() req: any,
+    @Param('tripId') tripId: string,
+    @Headers('accept-language') acceptLang?: string,
+  ) {
+    const lang = I18nService.parseLang(acceptLang);
+    return this.favoritesService.remove(req.userId, tripId, lang);
   }
 
   @Get(':tripId/check')

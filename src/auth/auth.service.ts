@@ -2,39 +2,42 @@ import { Injectable, Inject, UnauthorizedException, ConflictException, InternalS
 import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import * as jwt from 'jsonwebtoken';
-import { SUPABASE_CLIENT } from '../config/supabase.module';
+import { SUPABASE_CLIENT, SUPABASE_AUTH_CLIENT } from '../config/supabase.module';
 import { RegisterDto, LoginDto, ThirdPartyLoginDto } from './dto/auth.dto';
+import { I18nService, Lang } from '../i18n';
 
 @Injectable()
 export class AuthService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    @Inject(SUPABASE_AUTH_CLIENT) private readonly supabaseAuth: SupabaseClient,
     private readonly configService: ConfigService,
+    private readonly i18n: I18nService,
   ) {}
 
   // ============================================================
   // Email Auth — uses Supabase built-in Auth + profiles table
   // ============================================================
 
-  async register(dto: RegisterDto) {
-    // 1. Register in Supabase Auth
-    const { data: authData, error: authError } = await this.supabase.auth.signUp({
+  async register(dto: RegisterDto, lang: Lang = 'en') {
+    // 1. Register in Supabase Auth (must use anon client)
+    const { data: authData, error: authError } = await this.supabaseAuth.auth.signUp({
       email: dto.email,
       password: dto.password,
     });
 
     if (authError) {
       if (authError.message?.includes('already registered')) {
-        throw new ConflictException('Email already registered');
+        throw new ConflictException(this.i18n.t('auth.email_already_registered', lang));
       }
       throw new InternalServerErrorException(authError.message);
     }
 
     if (!authData.user) {
-      throw new InternalServerErrorException('Failed to create auth user');
+      throw new InternalServerErrorException(this.i18n.t('auth.failed_create_auth_user', lang));
     }
 
-    // 2. Create profile record linked to Supabase auth user
+    // 2. Create profile record in DB (use service_role client)
     const { data: profile, error: profileError } = await this.supabase
       .from('profiles')
       .insert({
@@ -48,27 +51,26 @@ export class AuthService {
       .single();
 
     if (profileError) {
-      // Rollback: delete the auth user if profile creation fails
       await this.supabase.auth.admin.deleteUser(authData.user.id);
-      throw new InternalServerErrorException('Failed to create user profile');
+      throw new InternalServerErrorException(this.i18n.t('auth.failed_create_profile', lang));
     }
 
     const token = this.generateToken(profile.id);
     return { user: profile, token };
   }
 
-  async login(dto: LoginDto) {
-    // 1. Authenticate via Supabase Auth
-    const { data: authData, error: authError } = await this.supabase.auth.signInWithPassword({
+  async login(dto: LoginDto, lang: Lang = 'en') {
+    // 1. Authenticate via Supabase Auth (must use anon client)
+    const { data: authData, error: authError } = await this.supabaseAuth.auth.signInWithPassword({
       email: dto.email,
       password: dto.password,
     });
 
     if (authError) {
-      throw new UnauthorizedException('Invalid credentials');
+      throw new UnauthorizedException(this.i18n.t('auth.invalid_credentials', lang));
     }
 
-    // 2. Find profile by Supabase auth user id
+    // 2. Find profile in DB (use service_role client)
     const { data: profile, error: profileError } = await this.supabase
       .from('profiles')
       .select('id, email, name, avatar_url, bio, auth_provider, created_at')
@@ -77,7 +79,7 @@ export class AuthService {
       .single();
 
     if (profileError || !profile) {
-      throw new UnauthorizedException('User profile not found');
+      throw new UnauthorizedException(this.i18n.t('auth.user_profile_not_found', lang));
     }
 
     const token = this.generateToken(profile.id);
@@ -88,8 +90,7 @@ export class AuthService {
   // Third-Party Auth — uses custom profiles table directly
   // ============================================================
 
-  async thirdPartyLogin(dto: ThirdPartyLoginDto) {
-    // 1. Look for existing profile with this provider + provider_user_id
+  async thirdPartyLogin(dto: ThirdPartyLoginDto, lang: Lang = 'en') {
     const { data: existing } = await this.supabase
       .from('profiles')
       .select('id, email, name, avatar_url, bio, auth_provider, created_at')
@@ -98,12 +99,10 @@ export class AuthService {
       .single();
 
     if (existing) {
-      // Existing user — return token
       const token = this.generateToken(existing.id);
       return { user: existing, token };
     }
 
-    // 2. New user — create profile
     const { data: profile, error } = await this.supabase
       .from('profiles')
       .insert({
@@ -117,7 +116,7 @@ export class AuthService {
       .single();
 
     if (error) {
-      throw new InternalServerErrorException('Failed to create user profile');
+      throw new InternalServerErrorException(this.i18n.t('auth.failed_create_profile', lang));
     }
 
     const token = this.generateToken(profile.id);
@@ -125,7 +124,7 @@ export class AuthService {
   }
 
   // ============================================================
-  // Token utilities — shared by both auth flows
+  // Token utilities
   // ============================================================
 
   private generateToken(userId: string): string {

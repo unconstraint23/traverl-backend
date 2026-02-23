@@ -86,6 +86,37 @@ CREATE TABLE IF NOT EXISTS comments (
   created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );
 
+-- Places cache table (Foursquare POI data)
+CREATE TABLE IF NOT EXISTS places_cache (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  fsq_id VARCHAR(255) UNIQUE NOT NULL,
+  name VARCHAR(255) NOT NULL,
+  address TEXT,
+  latitude DECIMAL(10,7),
+  longitude DECIMAL(10,7),
+  category VARCHAR(100),
+  rating DECIMAL(3,1),
+  photos JSONB DEFAULT '[]',
+  city VARCHAR(255),
+  country VARCHAR(255),
+  cached_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '7 days')
+);
+
+-- Itinerary cache table (DeepSeek AI generated)
+CREATE TABLE IF NOT EXISTS itinerary_cache (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  cache_key VARCHAR(500) UNIQUE NOT NULL,
+  destination VARCHAR(255) NOT NULL,
+  duration INTEGER NOT NULL,
+  budget VARCHAR(50) NOT NULL,
+  vibe VARCHAR(50) NOT NULL,
+  itinerary_data JSONB NOT NULL,
+  cached_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  expires_at TIMESTAMP WITH TIME ZONE DEFAULT (NOW() + INTERVAL '3 days'),
+  hit_count INTEGER DEFAULT 0
+);
+
 -- =====================================================
 -- INDEXES
 -- =====================================================
@@ -98,6 +129,10 @@ CREATE INDEX IF NOT EXISTS idx_trips_user_id ON trips(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_user_id ON favorites(user_id);
 CREATE INDEX IF NOT EXISTS idx_favorites_trip_id ON favorites(trip_id);
 CREATE INDEX IF NOT EXISTS idx_comments_trip_id ON comments(trip_id);
+CREATE INDEX IF NOT EXISTS idx_places_cache_city ON places_cache(city);
+CREATE INDEX IF NOT EXISTS idx_places_cache_expires ON places_cache(expires_at);
+CREATE INDEX IF NOT EXISTS idx_itinerary_cache_key ON itinerary_cache(cache_key);
+CREATE INDEX IF NOT EXISTS idx_itinerary_cache_expires ON itinerary_cache(expires_at);
 
 -- =====================================================
 -- SEED DATA
@@ -113,17 +148,9 @@ INSERT INTO categories (name, icon, sort_order) VALUES
   ('Adventure', 'terrain', 6)
 ON CONFLICT (name) DO NOTHING;
 
--- Destinations
-INSERT INTO destinations (name, location, image_url, rating, category, height, is_trending) VALUES
-  ('Kyoto', 'Japan', 'https://images.unsplash.com/photo-1493976040374-85c8e12f0c0e?q=80&w=2070&auto=format&fit=crop', 4.8, 'Culture', 250, TRUE),
-  ('Santorini', 'Greece', 'https://images.unsplash.com/photo-1570077188670-e3a8d69ac5ff?q=80&w=1929&auto=format&fit=crop', 4.9, 'Beaches', 200, TRUE),
-  ('Banff', 'Canada', 'https://images.unsplash.com/photo-1532274402911-5a369e4c4bb5?q=80&w=2070&auto=format&fit=crop', 4.7, 'Nature', 200, TRUE),
-  ('Cinque Terre', 'Italy', 'https://images.unsplash.com/photo-1516483638261-f4dbaf036963?q=80&w=1886&auto=format&fit=crop', 4.6, 'Culture', 250, TRUE),
-  ('Bali', 'Indonesia', 'https://images.unsplash.com/photo-1537996194471-e657df975ab4?q=80&w=2038&auto=format&fit=crop', 4.8, 'Beaches', 220, TRUE),
-  ('Swiss Alps', 'Switzerland', 'https://images.unsplash.com/photo-1531366936337-7c912a4589a7?q=80&w=2070&auto=format&fit=crop', 4.9, 'Nature', 240, TRUE),
-  ('Marrakech', 'Morocco', 'https://images.unsplash.com/photo-1597212618440-806262de4f6b?q=80&w=2073&auto=format&fit=crop', 4.5, 'Food', 200, FALSE),
-  ('Machu Picchu', 'Peru', 'https://images.unsplash.com/photo-1587595431973-160d0d94add1?q=80&w=2076&auto=format&fit=crop', 4.9, 'Adventure', 230, TRUE)
-ON CONFLICT DO NOTHING;
+-- Destinations: 不再使用静态种子数据
+-- 目的地记录会在创建 trip 时自动同步到 destinations 表
+-- 参见 TripsService.syncDestination()
 
 -- Demo user (password: Test123!) — email auth via Supabase
 -- Note: In production, this user should be created via supabase.auth.signUp first,
@@ -143,6 +170,8 @@ ALTER TABLE destinations ENABLE ROW LEVEL SECURITY;
 ALTER TABLE trips ENABLE ROW LEVEL SECURITY;
 ALTER TABLE favorites ENABLE ROW LEVEL SECURITY;
 ALTER TABLE comments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE places_cache ENABLE ROW LEVEL SECURITY;
+ALTER TABLE itinerary_cache ENABLE ROW LEVEL SECURITY;
 
 -- Drop old policies (from previous migration that used 'users' table name)
 DROP POLICY IF EXISTS "Service role has full access to users" ON profiles;
@@ -154,6 +183,8 @@ DROP POLICY IF EXISTS "Service role has full access to comments" ON comments;
 
 -- Drop new policies if they already exist (for idempotent re-runs)
 DROP POLICY IF EXISTS "Service role has full access to profiles" ON profiles;
+DROP POLICY IF EXISTS "Service role has full access to places_cache" ON places_cache;
+DROP POLICY IF EXISTS "Service role has full access to itinerary_cache" ON itinerary_cache;
 
 -- Allow all operations for service_role (used by backend)
 CREATE POLICY "Service role has full access to profiles" ON profiles FOR ALL USING (true) WITH CHECK (true);
@@ -162,3 +193,22 @@ CREATE POLICY "Service role has full access to destinations" ON destinations FOR
 CREATE POLICY "Service role has full access to trips" ON trips FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role has full access to favorites" ON favorites FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Service role has full access to comments" ON comments FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role has full access to places_cache" ON places_cache FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Service role has full access to itinerary_cache" ON itinerary_cache FOR ALL USING (true) WITH CHECK (true);
+
+-- =====================================================
+-- FIX: Foreign key constraints (users → profiles)
+-- Run this in Supabase SQL Editor if tables already exist
+-- =====================================================
+
+ALTER TABLE trips DROP CONSTRAINT IF EXISTS trips_user_id_fkey;
+ALTER TABLE trips ADD CONSTRAINT trips_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+
+ALTER TABLE favorites DROP CONSTRAINT IF EXISTS favorites_user_id_fkey;
+ALTER TABLE favorites ADD CONSTRAINT favorites_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;
+
+ALTER TABLE comments DROP CONSTRAINT IF EXISTS comments_user_id_fkey;
+ALTER TABLE comments ADD CONSTRAINT comments_user_id_fkey
+  FOREIGN KEY (user_id) REFERENCES profiles(id) ON DELETE CASCADE;

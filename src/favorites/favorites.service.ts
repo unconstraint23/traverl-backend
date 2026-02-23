@@ -1,15 +1,16 @@
 import { Injectable, Inject } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../config/supabase.module';
+import { I18nService, Lang } from '../i18n';
 
 @Injectable()
 export class FavoritesService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly i18n: I18nService,
   ) {}
 
-  async add(userId: string, tripId: string) {
-    // Check if already favorited
+  async add(userId: string, tripId: string, lang: Lang = 'en') {
     const { data: existing } = await this.supabase
       .from('favorites')
       .select('id')
@@ -18,7 +19,7 @@ export class FavoritesService {
       .single();
 
     if (existing) {
-      return { message: 'Already favorited' };
+      return { message: this.i18n.t('favorites.already_favorited', lang) };
     }
 
     const { data, error } = await this.supabase
@@ -31,7 +32,7 @@ export class FavoritesService {
     return data;
   }
 
-  async remove(userId: string, tripId: string) {
+  async remove(userId: string, tripId: string, lang: Lang = 'en') {
     const { error } = await this.supabase
       .from('favorites')
       .delete()
@@ -39,7 +40,7 @@ export class FavoritesService {
       .eq('trip_id', tripId);
 
     if (error) throw error;
-    return { message: 'Removed from favorites' };
+    return { message: this.i18n.t('favorites.removed', lang) };
   }
 
   async list(userId: string) {
