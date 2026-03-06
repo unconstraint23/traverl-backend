@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+import { Module, NestModule, MiddlewareConsumer } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
 import { AuthModule } from './auth/auth.module';
@@ -10,6 +10,7 @@ import { FavoritesModule } from './favorites/favorites.module';
 import { SupabaseModule } from './config/supabase.module';
 import { CacheRefreshModule } from './cache/cache.module';
 import { I18nModule } from './i18n';
+import { LoggerMiddleware } from './common/middleware/logger.middleware';
 
 @Module({
   imports: [
@@ -26,4 +27,8 @@ import { I18nModule } from './i18n';
     CacheRefreshModule,
   ],
 })
-export class AppModule {}
+export class AppModule implements NestModule {
+  configure(consumer: MiddlewareConsumer) {
+    consumer.apply(LoggerMiddleware).forRoutes('*');
+  }
+}

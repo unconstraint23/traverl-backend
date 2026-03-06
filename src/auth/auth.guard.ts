@@ -3,11 +3,14 @@ import {
   CanActivate,
   ExecutionContext,
   UnauthorizedException,
+  Logger,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 
 @Injectable()
 export class AuthGuard implements CanActivate {
+  private readonly logger = new Logger(AuthGuard.name);
+
   constructor(private readonly authService: AuthService) {}
 
   canActivate(context: ExecutionContext): boolean {
@@ -15,6 +18,7 @@ export class AuthGuard implements CanActivate {
     const authHeader = request.headers.authorization;
 
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      this.logger.warn(`Auth failed: missing or malformed Authorization header (${request.method} ${request.url})`);
       throw new UnauthorizedException('Missing or invalid token');
     }
 
@@ -23,7 +27,8 @@ export class AuthGuard implements CanActivate {
       const payload = this.authService.verifyToken(token);
       request.userId = payload.sub;
       return true;
-    } catch {
+    } catch (err) {
+      this.logger.warn(`Auth failed: ${err.message} (${request.method} ${request.url})`);
       throw new UnauthorizedException('Invalid or expired token');
     }
   }

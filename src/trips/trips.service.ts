@@ -120,49 +120,105 @@ export class TripsService {
 
     if (error) throw error;
 
-    // 自动将目的地同步到 destinations 表（若不存在则插入）
-    await this.syncDestination(dto.destination, data.cover_image, dto.vibe);
-
     return data;
   }
 
   async findAllByUser(userId: string) {
+    this.logger.log(`findAllByUser - userId: ${userId}`);
     const { data, error } = await this.supabase
       .from('trips')
       .select('*')
       .eq('user_id', userId)
       .order('created_at', { ascending: false });
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`findAllByUser failed - userId: ${userId}, error: ${error.message}`);
+      throw error;
+    }
+    this.logger.log(`findAllByUser success - userId: ${userId}, count: ${data?.length || 0}`);
     return data;
   }
 
   async findById(id: string, lang: Lang = 'en') {
-    const { data, error } = await this.supabase
-      .from('trips')
-      .select(`
-        *,
-        profiles:user_id (id, name, avatar_url)
-      `)
-      .eq('id', id)
-      .single();
+    this.logger.log(`findById - id: ${id}, lang: ${lang}`);
+    
+    try {
+      // First, try without the join to see if the trip exists
+      const { data, error } = await this.supabase
+        .from('trips')
+        .select('*')
+        .eq('id', id)
+        .maybeSingle(); // Use maybeSingle instead of single to handle no results gracefully
 
-    if (error || !data) throw new NotFoundException(this.i18n.t('trips.not_found', lang));
-    return data;
+      if (error) {
+        this.logger.error(`findById database error: id=${id}, error=${error.message}, code=${error.code}`);
+        throw error;
+      }
+
+      if (!data) {
+        this.logger.warn(`findById not found: id=${id}`);
+        throw new NotFoundException(this.i18n.t('trips.not_found', lang));
+      }
+      
+      // Then fetch the user profile separately if needed
+      if (data.user_id) {
+        const { data: profile } = await this.supabase
+          .from('profiles')
+          .select('id, name, avatar_url')
+          .eq('id', data.user_id)
+          .maybeSingle();
+        
+        if (profile) {
+          data.profiles = profile;
+        }
+      }
+      
+      this.logger.log(`findById success - id: ${id}, destination: ${data.destination}`);
+      return data;
+    } catch (error) {
+      if (error instanceof NotFoundException) {
+        throw error;
+      }
+      this.logger.error(`findById unexpected error: id=${id}, error=${error.message}`);
+      throw new NotFoundException(this.i18n.t('trips.not_found', lang));
+    }
   }
 
   async findAll() {
+    this.logger.log('findAll - fetching all trips');
     const { data, error } = await this.supabase
       .from('trips')
-      .select(`
-        *,
-        profiles:user_id (id, name, avatar_url)
-      `)
+      .select('*')
       .eq('status', 'generated')
       .order('created_at', { ascending: false })
       .limit(20);
 
-    if (error) throw error;
+    if (error) {
+      this.logger.error(`findAll failed - error: ${error.message}`);
+      throw error;
+    }
+    
+    // Fetch user profiles for all trips
+    if (data && data.length > 0) {
+      const userIds = [...new Set(data.map(trip => trip.user_id).filter(Boolean))];
+      if (userIds.length > 0) {
+        const { data: profiles } = await this.supabase
+          .from('profiles')
+          .select('id, name, avatar_url')
+          .in('id', userIds);
+        
+        if (profiles) {
+          const profileMap = new Map(profiles.map(p => [p.id, p]));
+          data.forEach(trip => {
+            if (trip.user_id && profileMap.has(trip.user_id)) {
+              trip.profiles = profileMap.get(trip.user_id);
+            }
+          });
+        }
+      }
+    }
+    
+    this.logger.log(`findAll success - count: ${data?.length || 0}`);
     return data;
   }
 
@@ -243,59 +299,6 @@ export class TripsService {
       for (let j = 0; j < day.activities.length && j < places.length; j++) {
         day.activities[j].place = places[j] || null;
       }
-    }
-  }
-
-  /**
-   * 将 trip 目的地同步到 destinations 表（若不存在则插入，已存在则更新图片）
-   */
-  private async syncDestination(
-    destination: string,
-    coverImage: string,
-    category?: string,
-  ): Promise<void> {
-    try {
-      // 检查 destinations 表中是否已存在该目的地（忽略大小写）
-      const { data: existing } = await this.supabase
-        .from('destinations')
-        .select('id, image_url')
-        .ilike('name', destination)
-        .maybeSingle();
-
-      if (!existing) {
-        // 插入新目的地
-        const { error: insertError } = await this.supabase
-          .from('destinations')
-          .insert({
-            name: destination,
-            location: destination,
-            image_url: coverImage,
-            rating: 4.5,
-            category: category || 'Trending',
-            height: 200,
-            is_trending: true,
-          });
-
-        if (insertError) {
-          this.logger.error(
-            `Failed to sync destination "${destination}": ${insertError.message}`,
-          );
-        } else {
-          this.logger.log(`Synced destination "${destination}" to destinations table`);
-        }
-      } else if (
-        existing.image_url &&
-        existing.image_url.includes('source.unsplash.com')
-      ) {
-        // 如果已有记录但图片是旧的 source.unsplash.com 链接，则更新
-        await this.supabase
-          .from('destinations')
-          .update({ image_url: coverImage })
-          .eq('id', existing.id);
-        this.logger.log(`Updated broken image for destination "${destination}"`);
-      }
-    } catch (err) {
-      this.logger.error(`syncDestination error: ${err.message}`);
     }
   }
 }
